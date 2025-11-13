@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV 数据分析工具</title>
+    <!-- 引入第三方库 -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- 基础样式 -->
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        h2 {
+            color: #555;
+            margin-top: 20px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        .upload-section {
+            text-align: center;
+            padding: 30px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .upload-section input[type="file"] {
+            margin: 10px;
+            padding: 10px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .chart-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .chart-controls select, .chart-controls button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .chart-controls button {
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        .chart-controls button:hover {
+            background-color: #45a049;
+        }
+        #data-table {
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CSV 数据分析工具</h1>
+        <p style="text-align: center; color: #666;">上传 CSV 文件以查看统计数据和生成交互式图表</p>
+    </div>
+
+    <!-- 文件上传区域 -->
+    <div class="container">
+        <div class="upload-section">
+            <h2>上传 CSV 文件</h2>
+            <input type="file" id="csv-file" accept=".csv">
+        </div>
+    </div>
+
+    <!-- 数据概览 -->
+    <div class="container" id="overview-container" style="display: none;">
+        <h2>数据概览</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">行数</div>
+                <div class="stat-value" id="row-count">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">列数</div>
+                <div class="stat-value" id="col-count">0</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据表格 -->
+    <div class="container" id="table-container" style="display: none;">
+        <h2>数据表格 (前 20 行)</h2>
+        <div id="data-table"></div>
+    </div>
+
+    <!-- 描述性统计 -->
+    <div class="container" id="stats-container" style="display: none;">
+        <h2>描述性统计</h2>
+        <div id="statistics"></div>
+    </div>
+
+    <!-- 图表生成 -->
+    <div class="container" id="chart-container" style="display: none;">
+        <h2>交互式图表</h2>
+        <div class="chart-controls">
+            <select id="x-axis">
+                <option value="">选择 X 轴</option>
+            </select>
+            <select id="y-axis">
+                <option value="">选择 Y 轴 (仅数值列)</option>
+            </select>
+            <select id="chart-type">
+                <option value="line">折线图</option>
+                <option value="bar">柱状图</option>
+                <option value="scatter">散点图</option>
+            </select>
+            <button id="generate-chart">生成图表</button>
+        </div>
+        <div id="chart"></div>
+    </div>
+
+    <script>
+        // 全局变量存储数据
+        let csvData = null;
+        let columns = [];
+        let numericColumns = [];
+
+        // 监听文件上传
+        document.getElementById('csv-file').addEventListener('change', handleFileUpload);
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                Papa.parse(file, {
+                    header: true,
+                    dynamicTyping: true,
+                    complete: function(results) {
+                        csvData = results.data;
+                        columns = results.meta.fields;
+                        
+                        // 识别数值列
+                        numericColumns = [];
+                        if (csvData.length > 0) {
+                            const firstRow = csvData[0];
+                            for (const col of columns) {
+                                if (typeof firstRow[col] === 'number') {
+                                    numericColumns.push(col);
+                                }
+                            }
+                        }
+                        
+                        // 显示所有内容
+                        updateOverview();
+                        displayTable();
+                        calculateStatistics();
+                        setupChartControls();
+                    }
+                });
+            }
+        }
+
+        // 更新数据概览
+        function updateOverview() {
+            const overviewContainer = document.getElementById('overview-container');
+            document.getElementById('row-count').textContent = csvData.length;
+            document.getElementById('col-count').textContent = columns.length;
+            overviewContainer.style.display = 'block';
+        }
+
+        // 显示数据表格
+        function displayTable() {
+            const tableContainer = document.getElementById('table-container');
+            const dataTable = document.getElementById('data-table');
+            
+            // 只显示前 20 行
+            const displayData = csvData.slice(0, 20);
+            
+            if (displayData.length === 0) {
+                dataTable.innerHTML = '<p>无数据显示</p>';
+                return;
+            }
+            
+            // 创建表格
+            let tableHTML = '<table><thead><tr>';
+            // 表头
+            for (const col of columns) {
+                tableHTML += `<th>${col}</th>`;
+            }
+            tableHTML += '</tr></thead><tbody>';
+            
+            // 表格内容
+            for (const row of displayData) {
+                tableHTML += '<tr>';
+                for (const col of columns) {
+                    tableHTML += `<td>${row[col] !== undefined ? row[col] : ''}</td>`;
+                }
+                tableHTML += '</tr>';
+            }
+            tableHTML += '</tbody></table>';
+            
+            dataTable.innerHTML = tableHTML;
+            tableContainer.style.display = 'block';
+        }
+
+        // 计算统计信息
+        function calculateStatistics() {
+            const statsContainer = document.getElementById('stats-container');
+            const statistics = document.getElementById('statistics');
+            
+            if (numericColumns.length === 0) {
+                statistics.innerHTML = '<p>无数值列可计算统计信息</p>';
+                statsContainer.style.display = 'block';
+                return;
+            }
+            
+            let statsHTML = '<table>';
+            statsHTML += '<thead><tr><th>统计量</th>';
+            for (const col of numericColumns) {
+                statsHTML += `<th>${col}</th>`;
+            }
+            statsHTML += '</tr></thead><tbody>';
+            
+            // 计算统计值
+            const stats = {};
+            for (const col of numericColumns) {
+                const values = csvData.map(row => row[col]).filter(val => typeof val === 'number');
+                stats[col] = {
+                    count: values.length,
+                    mean: values.length > 0 ? values.reduce((a, b) => a + b) / values.length : 0,
+                    median: getMedian(values),
+                    min: Math.min(...values),
+                    max: Math.max(...values),
+                    std: getStandardDeviation(values)
+                };
+            }
+            
+            // 添加统计行
+            const statTypes = ['count', 'mean', 'median', 'min', 'max', 'std'];
+            const statLabels = ['数量', '平均值', '中位数', '最小值', '最大值', '标准差'];
+            
+            for (let i = 0; i < statTypes.length; i++) {
+                const statType = statTypes[i];
+                const statLabel = statLabels[i];
+                
+                statsHTML += `<tr><td>${statLabel}</td>`;
+                for (const col of numericColumns) {
+                    const value = stats[col][statType];
+                    statsHTML += `<td>${Number(value).toFixed(4)}</td>`;
+                }
+                statsHTML += '</tr>';
+            }
+            
+            statsHTML += '</tbody></table>';
+            statistics.innerHTML = statsHTML;
+            statsContainer.style.display = 'block';
+        }
+
+        // 中位数计算
+        function getMedian(values) {
+            if (values.length === 0) return 0;
+            const sorted = values.slice().sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+        }
+
+        // 标准差计算
+        function getStandardDeviation(values) {
+            if (values.length < 2) return 0;
+            const mean = values.reduce((a, b) => a + b) / values.length;
+            const squaredDiffs = values.map(val => Math.pow(val - mean, 2));
+            const variance = squaredDiffs.reduce((a, b) => a + b) / (values.length - 1);
+            return Math.sqrt(variance);
+        }
+
+        // 设置图表控件选项
+        function setupChartControls() {
+            const xAxisSelect = document.getElementById('x-axis');
+            const yAxisSelect = document.getElementById('y-axis');
+            
+            // 清空选项
+            xAxisSelect.innerHTML = '<option value="">选择 X 轴</option>';
+            yAxisSelect.innerHTML = '<option value="">选择 Y 轴 (仅数值列)</option>';
+            
+            // 添加 X 轴选项
+            for (const col of columns) {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                xAxisSelect.appendChild(option);
+            }
+            
+            // 添加 Y 轴选项 (仅数值列)
+            for (const col of numericColumns) {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                yAxisSelect.appendChild(option);
+            }
+            
+            // 显示图表容器
+            const chartContainer = document.getElementById('chart-container');
+            chartContainer.style.display = 'block';
+            
+            // 监听生成图表按钮
+            document.getElementById('generate-chart').addEventListener('click', generateChart);
+        }
+
+        // 生成图表
+        function generateChart() {
+            const xAxis = document.getElementById('x-axis').value;
+            const yAxis = document.getElementById('y-axis').value;
+            const chartType = document.getElementById('chart-type').value;
+            
+            if (!xAxis || !yAxis) {
+                alert('请选择 X 轴和 Y 轴');
+                return;
+            }
+            
+            const chartDiv = document.getElementById('chart');
+            
+            // 准备数据
+            const xData = csvData.map(row => row[xAxis]);
+            const yData = csvData.map(row => row[yAxis]);
+            
+            // 创建 Plotly 图表
+            const data = [{
+                x: xData,
+                y: yData,
+                type: chartType,
+                name: `${yAxis} vs ${xAxis}`
+            }];
+            
+            const layout = {
+                title: `${yAxis} vs ${xAxis}`,
+                xaxis: { title: xAxis },
+                yaxis: { title: yAxis },
+                margin: { l: 60, r: 20, t: 40, b: 60 }
+            };
+            
+            Plotly.newPlot(chartDiv, data, layout);
+        }
+    </script>
+</body>
+</html>
